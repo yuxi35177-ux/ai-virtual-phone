@@ -15,6 +15,12 @@ type PageShellProps = {
   bodyRef?: Ref<HTMLDivElement>;
 };
 
+type TouchStartPoint = {
+  x: number;
+  y: number;
+  ignored: boolean;
+};
+
 export function PageShell({
   title = "",
   onBack,
@@ -25,29 +31,27 @@ export function PageShell({
   className,
   bodyRef,
 }: PageShellProps) {
-  const touchStartRef = useRef<{
-    x: number;
-    y: number;
-    ignored: boolean;
-  } | null>(null);
+  const touchStartRef = useRef<TouchStartPoint | null>(null);
 
-  const handleTouchStart = (
-    event: TouchEvent<HTMLDivElement>
-  ) => {
-    if (!onBack || event.touches.length !== 1) {
-      touchStartRef.current = null;
-      return;
-    }
-
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
+    if (!touch) return;
+
     const target = event.target;
 
     const ignored =
       target instanceof Element &&
-      Boolean(
-        target.closest(
-          'input, textarea, select, button, a, [role="button"], [data-no-swipe-back], [data-horizontal-scroll], [contenteditable="true"]'
-        )
+      !!target.closest(
+        [
+          "input",
+          "textarea",
+          "select",
+          "button",
+          "a",
+          "[role='button']",
+          "[data-no-swipe-back]",
+          "[data-horizontal-scroll]",
+        ].join(",")
       );
 
     touchStartRef.current = {
@@ -57,34 +61,29 @@ export function PageShell({
     };
   };
 
-  const handleTouchEnd = (
-    event: TouchEvent<HTMLDivElement>
-  ) => {
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
+    if (!start || start.ignored || !onBack) return;
+
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+
+    // 必须是明显的横向滑动，避免误触上下滚动。
     if (
-      !onBack ||
-      !start ||
-      start.ignored ||
-      event.changedTouches.length !== 1
+      Math.abs(dx) < 55 ||
+      Math.abs(dy) > 75 ||
+      Math.abs(dx) < Math.abs(dy) * 1.25
     ) {
       return;
     }
 
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-
-    // 左右滑动都可以返回上一层。
-    // 不在移动过程中更新 React 状态。
-    if (
-      Math.abs(dx) >= 55 &&
-      Math.abs(dy) <= 75 &&
-      Math.abs(dx) > Math.abs(dy) * 1.25
-    ) {
-      onBack();
-    }
+    // 左滑和右滑都返回上一级页面。
+    onBack();
   };
 
   return (
@@ -95,10 +94,10 @@ export function PageShell({
       onTouchCancel={() => {
         touchStartRef.current = null;
       }}
+      style={{ touchAction: "pan-y" }}
     >
       <header className="page-header" data-ui="header">
         <div className="page-header-safe-area" />
-
         <div className="page-header-content">
           {onBack ? (
             <button
@@ -107,10 +106,7 @@ export function PageShell({
               onClick={onBack}
               aria-label="返回"
             >
-              <ChevronLeft
-                size={24}
-                strokeWidth={1.5}
-              />
+              <ChevronLeft size={24} strokeWidth={1.5} />
             </button>
           ) : leftAction ? (
             <span>{leftAction}</span>
@@ -118,23 +114,15 @@ export function PageShell({
             <span style={{ width: 40 }} />
           )}
 
-          <span className="page-title">
-            {title}
-          </span>
+          <span className="page-title">{title}</span>
 
           <span className="page-header-right">
-            {rightAction ?? (
-              <span style={{ width: 40 }} />
-            )}
+            {rightAction ?? <span style={{ width: 40 }} />}
           </span>
         </div>
       </header>
 
-      <div
-        ref={bodyRef}
-        className="page-body"
-        data-ui="body"
-      >
+      <div ref={bodyRef} className="page-body" data-ui="body">
         {children}
       </div>
 
@@ -161,7 +149,6 @@ export function PageOverlayHeader({
       className={`page-header pointer-events-none absolute top-0 left-0 right-0 z-10 ${className ?? ""}`}
     >
       <div className="page-header-safe-area" />
-
       <div className="page-header-content">
         <button
           className="page-back-btn pointer-events-auto"
@@ -169,20 +156,13 @@ export function PageOverlayHeader({
           onClick={onBack}
           aria-label="返回"
         >
-          <ChevronLeft
-            size={24}
-            strokeWidth={1.5}
-          />
+          <ChevronLeft size={24} strokeWidth={1.5} />
         </button>
 
-        <span className="page-title">
-          {title}
-        </span>
+        <span className="page-title">{title}</span>
 
         <span className="page-header-right pointer-events-auto">
-          {rightAction ?? (
-            <span style={{ width: 40 }} />
-          )}
+          {rightAction ?? <span style={{ width: 40 }} />}
         </span>
       </div>
     </header>
