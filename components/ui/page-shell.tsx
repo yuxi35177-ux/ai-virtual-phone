@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useRef } from "react";
@@ -32,7 +31,9 @@ export function PageShell({
     ignored: boolean;
   } | null>(null);
 
-  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+  const handleTouchStart = (
+    event: TouchEvent<HTMLDivElement>
+  ) => {
     if (!onBack || event.touches.length !== 1) {
       touchStartRef.current = null;
       return;
@@ -41,21 +42,13 @@ export function PageShell({
     const touch = event.touches[0];
     const target = event.target;
 
-    const edgeWidth = 32;
-    const screenWidth = window.innerWidth;
-
-    const fromEdge =
-      touch.clientX <= edgeWidth ||
-      touch.clientX >= screenWidth - edgeWidth;
-
     const ignored =
-      fromEdge ||
-      (target instanceof Element &&
-        Boolean(
-          target.closest(
-            'input, textarea, select, button, a, [role="button"], [data-no-swipe-back], [data-horizontal-scroll], [contenteditable="true"]'
-          )
-        ));
+      target instanceof Element &&
+      Boolean(
+        target.closest(
+          'input, textarea, select, button, a, [role="button"], [data-no-swipe-back], [data-horizontal-scroll], [contenteditable="true"]'
+        )
+      );
 
     touchStartRef.current = {
       x: touch.clientX,
@@ -64,7 +57,9 @@ export function PageShell({
     };
   };
 
-  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+  const handleTouchEnd = (
+    event: TouchEvent<HTMLDivElement>
+  ) => {
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
@@ -81,10 +76,12 @@ export function PageShell({
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
+    // 左右滑动都可以返回上一层。
+    // 不在移动过程中更新 React 状态。
     if (
-      Math.abs(dx) >= 76 &&
-      Math.abs(dy) <= 56 &&
-      Math.abs(dx) > Math.abs(dy) * 1.35
+      Math.abs(dx) >= 55 &&
+      Math.abs(dy) <= 75 &&
+      Math.abs(dx) > Math.abs(dy) * 1.25
     ) {
       onBack();
     }
@@ -101,6 +98,7 @@ export function PageShell({
     >
       <header className="page-header" data-ui="header">
         <div className="page-header-safe-area" />
+
         <div className="page-header-content">
           {onBack ? (
             <button
@@ -109,7 +107,10 @@ export function PageShell({
               onClick={onBack}
               aria-label="返回"
             >
-              <ChevronLeft size={24} strokeWidth={1.5} />
+              <ChevronLeft
+                size={24}
+                strokeWidth={1.5}
+              />
             </button>
           ) : leftAction ? (
             <span>{leftAction}</span>
@@ -117,15 +118,23 @@ export function PageShell({
             <span style={{ width: 40 }} />
           )}
 
-          <span className="page-title">{title}</span>
+          <span className="page-title">
+            {title}
+          </span>
 
           <span className="page-header-right">
-            {rightAction ?? <span style={{ width: 40 }} />}
+            {rightAction ?? (
+              <span style={{ width: 40 }} />
+            )}
           </span>
         </div>
       </header>
 
-      <div ref={bodyRef} className="page-body" data-ui="body">
+      <div
+        ref={bodyRef}
+        className="page-body"
+        data-ui="body"
+      >
         {children}
       </div>
 
@@ -134,10 +143,6 @@ export function PageShell({
   );
 }
 
-/**
- * 画布类页面使用的悬浮标题栏。
- * 保留画布交互，返回按钮仍可点击。
- */
 type PageOverlayHeaderProps = {
   title: ReactNode;
   onBack: () => void;
@@ -156,6 +161,7 @@ export function PageOverlayHeader({
       className={`page-header pointer-events-none absolute top-0 left-0 right-0 z-10 ${className ?? ""}`}
     >
       <div className="page-header-safe-area" />
+
       <div className="page-header-content">
         <button
           className="page-back-btn pointer-events-auto"
@@ -163,13 +169,20 @@ export function PageOverlayHeader({
           onClick={onBack}
           aria-label="返回"
         >
-          <ChevronLeft size={24} strokeWidth={1.5} />
+          <ChevronLeft
+            size={24}
+            strokeWidth={1.5}
+          />
         </button>
 
-        <span className="page-title">{title}</span>
+        <span className="page-title">
+          {title}
+        </span>
 
         <span className="page-header-right pointer-events-auto">
-          {rightAction ?? <span style={{ width: 40 }} />}
+          {rightAction ?? (
+            <span style={{ width: 40 }} />
+          )}
         </span>
       </div>
     </header>
