@@ -26,7 +26,6 @@ export function PageShell({
   className,
   bodyRef,
 }: PageShellProps) {
-  // 使用 ref 记录手势，不在手指移动时触发 React 重新渲染。
   const touchStartRef = useRef<{
     x: number;
     y: number;
@@ -39,16 +38,25 @@ export function PageShell({
       return;
     }
 
-    const target = event.target;
-    const ignored =
-      target instanceof Element &&
-      Boolean(
-        target.closest(
-          'input, textarea, select, button, a, [role="button"], [data-no-swipe-back], [data-horizontal-scroll]'
-        )
-      );
-
     const touch = event.touches[0];
+    const target = event.target;
+
+    const edgeWidth = 32;
+    const screenWidth = window.innerWidth;
+
+    const fromEdge =
+      touch.clientX <= edgeWidth ||
+      touch.clientX >= screenWidth - edgeWidth;
+
+    const ignored =
+      fromEdge ||
+      (target instanceof Element &&
+        Boolean(
+          target.closest(
+            'input, textarea, select, button, a, [role="button"], [data-no-swipe-back], [data-horizontal-scroll], [contenteditable="true"]'
+          )
+        ));
+
     touchStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
@@ -73,7 +81,6 @@ export function PageShell({
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
-    // 只识别明显的水平滑动，避免干扰上下滚动。
     if (
       Math.abs(dx) >= 76 &&
       Math.abs(dy) <= 56 &&
@@ -111,6 +118,7 @@ export function PageShell({
           )}
 
           <span className="page-title">{title}</span>
+
           <span className="page-header-right">
             {rightAction ?? <span style={{ width: 40 }} />}
           </span>
