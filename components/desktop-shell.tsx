@@ -2,6 +2,8 @@
 
 import { Component, memo, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
+import { usePhoneBack } from "@/lib/hooks/use-phone-back";
+
 import { updateStatusBarTone } from "@/lib/bg-tone";
 import { startDiaryEntryTimerService, stopDiaryEntryTimerService } from "@/lib/diary-entry-timer-service";
 import { startFollowUpService, stopFollowUpService } from "@/lib/follow-up-service";
@@ -1152,6 +1154,11 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [slotIconHeight, setSlotIconHeight] = useState<number | null>(null);
   const [slotRowStep, setSlotRowStep] = useState<number | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  usePhoneBack(shellRef, activeApp !== null, () => {
+    setActiveApp(null);
+    setActiveChatSession(null);
+    setChatInitSessionId(null);
+  });
   const glassBusyTimerRef = useRef<number>(0);
   const iconGridRef = useRef<HTMLElement | null>(null);
   const swipeRef = useRef<{
