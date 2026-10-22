@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import type { ReactNode, Ref, TouchEvent } from "react";
 import { ChevronLeft } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
 
 type PageShellProps = {
   title?: ReactNode;
@@ -43,16 +44,50 @@ export function PageShell({
   bodyRef,
 }: PageShellProps) {
   const touchStartRef = useRef<TouchStartPoint | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // 终极安全返回逻辑
+  const handleSafeBack = () => {
+    if (onBack) {
+      onBack();
+    } else {
+      router.back();
+    }
+
+    // 兜底补救：如果执行了 back 但 150 毫秒后仍停留在当前页（说明历史栈空了导致没反应）
+    // 强制直接跳回主桌面，彻底解决“第一次没效果”的问题
+    setTimeout(() => {
+      if (window.location.pathname === pathname && pathname !== "/") {
+        router.push("/");
+      }
+    }, 150);
+  };
+
+  // 拦截安卓系统物理边缘滑动
+  useEffect(() => {
+    if (pathname === "/") return;
+
+    // 强行向浏览器插入一条历史记录，防止系统的边缘滑动直接退出应用
+    window.history.pushState(null, "", window.location.href);
+
+    const handlePopState = () => {
+      // 当系统边缘滑动的灰色箭头触发时，接管操作，执行我们的代码返回逻辑
+      handleSafeBack();
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   const handleTouchStart = (
     event: TouchEvent<HTMLDivElement>
   ) => {
     const touch = event.touches[0];
-
     if (!touch) return;
 
     const target = event.target;
-
     const ignored =
       target instanceof Element &&
       !!target.closest(IGNORE_SWIPE_SELECTOR);
@@ -70,28 +105,22 @@ export function PageShell({
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
-    if (!start || start.ignored || !onBack) return;
+    // 放宽限制：只要存在 onBack 就允许滑动，防止代码没有传 onBack 导致失效
+    if (!start || start.ignored) return;
 
     const touch = event.changedTouches[0];
-
     if (!touch) return;
 
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
-    // 优化：将短距离滑动阈值降低到 30，轻轻一划就能返回
-    if (Math.abs(dx) < 30) return;
-
-    // 优化：将上下滑动的容错率提高到 100，允许手指有一定的倾斜
+    // 灵敏度拉满：只要滑过 20 像素就判定为有效
+    if (Math.abs(dx) < 20) return;
     if (Math.abs(dy) > 100) return;
+    if (Math.abs(dx) < Math.abs(dy) * 1.1) return;
 
-    // 优化：放宽横向移动为主的比例判定
-    if (Math.abs(dx) < Math.abs(dy) * 1.1) {
-      return;
-    }
-
-    // 左滑、右滑都返回上一级。
-    onBack();
+    // 代码级滑动也走相同的安全返回逻辑
+    handleSafeBack();
   };
 
   const handleTouchCancel = () => {
@@ -108,13 +137,12 @@ export function PageShell({
     >
       <header className="page-header" data-ui="header">
         <div className="page-header-safe-area" />
-
         <div className="page-header-content">
           {onBack ? (
             <button
               className="page-back-btn"
               type="button"
-              onClick={onBack}
+              onClick={handleSafeBack}
               aria-label="返回"
             >
               <ChevronLeft size={24} strokeWidth={1.5} />
@@ -124,9 +152,7 @@ export function PageShell({
           ) : (
             <span style={{ width: 40 }} />
           )}
-
           <span className="page-title">{title}</span>
-
           <span className="page-header-right">
             {rightAction ?? (
               <span style={{ width: 40 }} />
@@ -168,7 +194,6 @@ export function PageOverlayHeader({
       }`}
     >
       <div className="page-header-safe-area" />
-
       <div className="page-header-content">
         <button
           className="page-back-btn pointer-events-auto"
@@ -178,9 +203,7 @@ export function PageOverlayHeader({
         >
           <ChevronLeft size={24} strokeWidth={1.5} />
         </button>
-
         <span className="page-title">{title}</span>
-
         <span className="page-header-right pointer-events-auto">
           {rightAction ?? (
             <span style={{ width: 40 }} />
