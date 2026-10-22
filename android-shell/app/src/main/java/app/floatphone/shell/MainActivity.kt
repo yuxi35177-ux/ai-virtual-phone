@@ -175,7 +175,12 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else moveTaskToBack(true)
+                webView.evaluateJavascript(
+                    "!window.dispatchEvent(new Event('floatphone:back', {cancelable:true}))"
+                ) { handled ->
+                    // The webpage owns its React subpages and keeps the phone desktop open.
+                    if (handled != "true" && webView.canGoBack()) webView.goBack()
+                }
             }
         })
 
