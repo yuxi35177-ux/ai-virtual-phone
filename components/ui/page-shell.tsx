@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useRef } from "react";
@@ -22,6 +21,7 @@ type TouchStartPoint = {
   ignored: boolean;
 };
 
+// 被忽略的元素，在这些元素上滑动不会触发返回
 const IGNORE_SWIPE_SELECTOR = [
   "input",
   "textarea",
@@ -49,11 +49,9 @@ export function PageShell({
     event: TouchEvent<HTMLDivElement>
   ) => {
     const touch = event.touches[0];
-
     if (!touch) return;
 
     const target = event.target;
-
     const ignored =
       target instanceof Element &&
       !!target.closest(IGNORE_SWIPE_SELECTOR);
@@ -71,27 +69,27 @@ export function PageShell({
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
+    // 必须有 onBack 函数才执行滑动判断
     if (!start || start.ignored || !onBack) return;
 
     const touch = event.changedTouches[0];
-
     if (!touch) return;
 
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
-    // 忽略短距离滑动。
+    // 忽略短距离滑动（小于 55 像素）
     if (Math.abs(dx) < 55) return;
 
-    // 忽略上下滑动。
+    // 忽略上下滑动为主的手势（垂直距离大于 70 像素）
     if (Math.abs(dy) > 70) return;
 
-    // 必须明显以横向移动为主。
+    // 必须明显以横向移动为主
     if (Math.abs(dx) < Math.abs(dy) * 1.3) {
       return;
     }
 
-    // 左滑、右滑都返回上一级。
+    // 触发返回：Math.abs(dx) 保证了 dx 无论正负（右滑或左滑）均可执行
     onBack();
   };
 
@@ -105,6 +103,7 @@ export function PageShell({
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchCancel}
+      // 禁用浏览器的默认横向滑动行为，防止冲突
       style={{ touchAction: "pan-y" }}
     >
       <header className="page-header" data-ui="header">
