@@ -49,9 +49,13 @@ export function writePwaDisplayPreference(preference: PwaDisplayPreference) {
   window.dispatchEvent(new CustomEvent(PWA_DISPLAY_MODE_CHANGED_EVENT, { detail: preference }));
 }
 
-/** Preserve the upstream default: mobile browsers request fullscreen unless Edge or explicitly disabled. */
+/** Installed display mode handles immersion; Android DOM fullscreen consumes the first system-back gesture. */
 export function shouldRequestPwaFullscreen(): boolean {
   if (typeof document === "undefined" || typeof navigator === "undefined") return false;
+  // Android handles Back by exiting requestFullscreen() before it sends popstate.
+  // Keep manifest fullscreen/standalone and native APK display modes, without
+  // adding a second fullscreen layer every time an in-app back button is clicked.
+  if (/Android/i.test(navigator.userAgent)) return false;
   const preference = readPwaDisplayPreference(document.cookie);
   if (preference === "standalone") return false;
   if (preference === "fullscreen") return true;
