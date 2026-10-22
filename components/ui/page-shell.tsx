@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useRef } from "react";
@@ -21,6 +22,17 @@ type TouchStartPoint = {
   ignored: boolean;
 };
 
+const IGNORE_SWIPE_SELECTOR = [
+  "input",
+  "textarea",
+  "select",
+  "button",
+  "a",
+  "[role='button']",
+  "[data-no-swipe-back]",
+  "[data-horizontal-scroll]",
+].join(",");
+
 export function PageShell({
   title = "",
   onBack,
@@ -33,26 +45,18 @@ export function PageShell({
 }: PageShellProps) {
   const touchStartRef = useRef<TouchStartPoint | null>(null);
 
-  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+  const handleTouchStart = (
+    event: TouchEvent<HTMLDivElement>
+  ) => {
     const touch = event.touches[0];
+
     if (!touch) return;
 
     const target = event.target;
 
     const ignored =
       target instanceof Element &&
-      !!target.closest(
-        [
-          "input",
-          "textarea",
-          "select",
-          "button",
-          "a",
-          "[role='button']",
-          "[data-no-swipe-back]",
-          "[data-horizontal-scroll]",
-        ].join(",")
-      );
+      !!target.closest(IGNORE_SWIPE_SELECTOR);
 
     touchStartRef.current = {
       x: touch.clientX,
@@ -61,29 +65,38 @@ export function PageShell({
     };
   };
 
-  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+  const handleTouchEnd = (
+    event: TouchEvent<HTMLDivElement>
+  ) => {
     const start = touchStartRef.current;
     touchStartRef.current = null;
 
     if (!start || start.ignored || !onBack) return;
 
     const touch = event.changedTouches[0];
+
     if (!touch) return;
 
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
-    // 必须是明显的横向滑动，避免误触上下滚动。
-    if (
-      Math.abs(dx) < 55 ||
-      Math.abs(dy) > 75 ||
-      Math.abs(dx) < Math.abs(dy) * 1.25
-    ) {
+    // 忽略短距离滑动。
+    if (Math.abs(dx) < 55) return;
+
+    // 忽略上下滑动。
+    if (Math.abs(dy) > 70) return;
+
+    // 必须明显以横向移动为主。
+    if (Math.abs(dx) < Math.abs(dy) * 1.3) {
       return;
     }
 
-    // 左滑和右滑都返回上一级页面。
+    // 左滑、右滑都返回上一级。
     onBack();
+  };
+
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
   };
 
   return (
@@ -91,13 +104,12 @@ export function PageShell({
       className={`page-shell ${className ?? ""}`}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      onTouchCancel={() => {
-        touchStartRef.current = null;
-      }}
+      onTouchCancel={handleTouchCancel}
       style={{ touchAction: "pan-y" }}
     >
       <header className="page-header" data-ui="header">
         <div className="page-header-safe-area" />
+
         <div className="page-header-content">
           {onBack ? (
             <button
@@ -117,12 +129,18 @@ export function PageShell({
           <span className="page-title">{title}</span>
 
           <span className="page-header-right">
-            {rightAction ?? <span style={{ width: 40 }} />}
+            {rightAction ?? (
+              <span style={{ width: 40 }} />
+            )}
           </span>
         </div>
       </header>
 
-      <div ref={bodyRef} className="page-body" data-ui="body">
+      <div
+        ref={bodyRef}
+        className="page-body"
+        data-ui="body"
+      >
         {children}
       </div>
 
@@ -146,9 +164,12 @@ export function PageOverlayHeader({
 }: PageOverlayHeaderProps) {
   return (
     <header
-      className={`page-header pointer-events-none absolute top-0 left-0 right-0 z-10 ${className ?? ""}`}
+      className={`page-header pointer-events-none absolute top-0 left-0 right-0 z-10 ${
+        className ?? ""
+      }`}
     >
       <div className="page-header-safe-area" />
+
       <div className="page-header-content">
         <button
           className="page-back-btn pointer-events-auto"
@@ -162,7 +183,9 @@ export function PageOverlayHeader({
         <span className="page-title">{title}</span>
 
         <span className="page-header-right pointer-events-auto">
-          {rightAction ?? <span style={{ width: 40 }} />}
+          {rightAction ?? (
+            <span style={{ width: 40 }} />
+          )}
         </span>
       </div>
     </header>
