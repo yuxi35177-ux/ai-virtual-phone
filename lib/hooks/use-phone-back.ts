@@ -76,16 +76,24 @@ export function usePhoneBack(
     const onNativeBack = (event: Event) => { event.preventDefault(); back(); };
     // An installed PWA keeps one in-app history entry so Android back can return
     // through React's page state instead of immediately closing the window.
-    const installed = window.matchMedia("(display-mode: standalone)").matches ||
-      window.matchMedia("(display-mode: fullscreen)").matches;
+    // Listen before any fullscreen/display-mode transition. A desktop shortcut
+    // may initially report browser mode and switch modes after the first tap.
     const guardKey = "__floatPhoneBackGuard";
+    let guardReady = false;
     const addGuard = () => {
+      // Chromium may skip history entries created before the first user action.
+      // Arm again from pointerup/touchend, when that action has actually happened.
+      if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+      guardReady = true;
       if (!window.history.state?.[guardKey]) {
         window.history.pushState({ ...window.history.state, [guardKey]: true }, "", window.location.href);
       }
     };
-    const onPop = () => { addGuard(); back(); };
-    if (installed) { addGuard(); window.addEventListener("popstate", onPop); }
+    const onPop = () => { if (guardReady) { addGuard(); back(); } };
+    addGuard();
+    window.addEventListener("popstate", onPop);
+    shell.addEventListener("pointerup", addGuard, true);
+    shell.addEventListener("touchend", addGuard, true);
     window.addEventListener("floatphone:back", onNativeBack);
     shell.addEventListener("touchstart", onStart, { capture: true, passive: true });
     shell.addEventListener("touchmove", onMove, { capture: true, passive: false });
@@ -94,6 +102,8 @@ export function usePhoneBack(
     shell.addEventListener("click", onClick, true);
     return () => {
       window.removeEventListener("popstate", onPop);
+      shell.removeEventListener("pointerup", addGuard, true);
+      shell.removeEventListener("touchend", addGuard, true);
       window.removeEventListener("floatphone:back", onNativeBack);
       shell.removeEventListener("touchstart", onStart, true);
       shell.removeEventListener("touchmove", onMove, true);
