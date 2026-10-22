@@ -3,7 +3,9 @@
 import { useEffect, useRef, type RefObject } from "react";
 
 const IGNORE = "input,textarea,select,[contenteditable='true'],[role='slider'],[data-no-swipe-back],[data-horizontal-scroll],.ui-swipe-wrap,canvas,video,iframe";
-const BACK = "[data-phone-back],button[aria-label='返回'],button[aria-label='返回上一级'],.page-header button.page-back-btn:not([aria-label='更多'])";
+// Styling classes are shared by chat's +/menu buttons; only explicit back
+// semantics identify a navigation action.
+const BACK = "[data-phone-back],button[aria-label='返回'],button[aria-label='返回上一级']";
 
 /** One gesture owner for the whole phone, including pages which do not use PageShell. */
 export function usePhoneBack(
@@ -36,7 +38,7 @@ export function usePhoneBack(
       if (!current.current.appOpen || event.touches.length !== 1) return;
       const target = event.target;
       if (!(target instanceof Element) || target.closest(IGNORE)) return;
-      if (document.querySelector("[role='dialog'],[aria-modal='true']")) return;
+      if (Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'],[aria-modal='true']")).some(visible)) return;
       // Preserve controls which already consume horizontal dragging, including carousels.
       for (let el: Element | null = target; el && el !== shell; el = el.parentElement) {
         const style = getComputedStyle(el);
