@@ -76,22 +76,27 @@ export function usePhoneBack(
       if (event.isTrusted && Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
     };
     const onNativeBack = (event: Event) => { event.preventDefault(); back(); };
-    // An installed PWA keeps one in-app history entry so Android back can return
-    // through React's page state instead of immediately closing the window.
-    // Listen before any fullscreen/display-mode transition. A desktop shortcut
-    // may initially report browser mode and switch modes after the first tap.
+    // Reuse the SAME two history entries. Pushing a replacement in popstate
+    // consumes Chromium's activation and can make the next system Back skip
+    // the phone entirely. Forward traversal restores the existing guard.
     const guardKey = "__floatPhoneBackGuard";
     let guardReady = false;
+    let restoring = false;
     const addGuard = () => {
-      // Chromium may skip history entries created before the first user action.
-      // Arm again from pointerup/touchend, when that action has actually happened.
-      if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
-      guardReady = true;
+      if (restoring || (navigator.userActivation && !navigator.userActivation.hasBeenActive)) return;
       if (!window.history.state?.[guardKey]) {
         window.history.pushState({ ...window.history.state, [guardKey]: true }, "", window.location.href);
       }
+      guardReady = true;
     };
-    const onPop = () => { if (guardReady) { addGuard(); back(); } };
+    const onPop = (event: PopStateEvent) => {
+      if (!guardReady) return;
+      if (restoring) { restoring = false; return; }
+      if (event.state?.[guardKey]) return;
+      restoring = true;
+      window.history.forward();
+      back();
+    };
     addGuard();
     window.addEventListener("popstate", onPop);
     shell.addEventListener("pointerup", addGuard, true);
