@@ -173,7 +173,7 @@ export function hydrateKvDb(): Promise<void> {
         }
         for (const k of removeKeys) personaLocalStorage.removeItem(k);
         // Pin the upgrade's current identity to the existing, unchanged databases.
-        const registry = initializePersonaRegistry(_cache.get("ai_phone_user_identities_v1") ?? null, _cache.get("ai_phone_bindings_v1") ?? null);
+        const registry = initializePersonaRegistry(_cache.get("ai_phone_user_identities_v1") ?? personaLocalStorage.getItem("ai_phone_user_identities_v1"), _cache.get("ai_phone_bindings_v1") ?? personaLocalStorage.getItem("ai_phone_bindings_v1"));
         await sharedDb.entries.put({ key: PERSONA_REGISTRY_KEY, value: JSON.stringify(registry) });
     })().then(() => {
         _hydrated = true;

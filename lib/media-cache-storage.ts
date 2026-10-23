@@ -1,3 +1,4 @@
+import { personaDatabaseName } from "./persona-scope";
 import Dexie from "dexie";
 
 // ── Database ─────────────────────────────────────
@@ -14,7 +15,7 @@ class MediaCacheDatabase extends Dexie {
     entries!: Dexie.Table<MediaCacheEntry, string>;
 
     constructor() {
-        super("AiPhoneMediaCacheDB");
+        super(personaDatabaseName("AiPhoneMediaCacheDB"));
         this.version(1).stores({
             entries: "id, createdAt",
         });

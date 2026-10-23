@@ -25,7 +25,7 @@ export function initializePersonaRegistry(identitiesRaw: string | null, bindings
   documentRegistry = r;
   return r;
 }
-const HISTORY_DATABASES = new Set(["AiPhoneKvDB", "AiPhoneChatDB", "AiPhoneMomentsDB", "ai_phone_memory_db_v1", "AiPhoneStoryDB", "AiPhoneVnDB", "AiPhoneMapDB", "AiPhoneDwellingDB", "AiPhoneCheckPhoneDB", "AiPhoneMascotDB", "AiPhoneQaDB", "reading-db", "reading-raw-files"]);
+const HISTORY_DATABASES = new Set(["AiPhoneKvDB", "AiPhoneMediaCacheDB", "AiPhoneChatDB", "AiPhoneMomentsDB", "ai_phone_memory_db_v1", "AiPhoneStoryDB", "AiPhoneVnDB", "AiPhoneMapDB", "AiPhoneDwellingDB", "AiPhoneCheckPhoneDB", "AiPhoneMascotDB", "AiPhoneQaDB", "reading-db", "reading-raw-files"]);
 export function personaDatabaseName(name: string): string {
   if (!initial || initial.activeId === initial.ownerId || !HISTORY_DATABASES.has(name)) return name;
   return `${name}__persona_${encodeURIComponent(initial.activeId)}`;
