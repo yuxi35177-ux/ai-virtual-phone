@@ -1,5 +1,6 @@
 "use client";
 
+import { isResumingPersona } from "@/lib/persona-navigation";
 import { Component, memo, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 import { usePhoneBack } from "@/lib/hooks/use-phone-back";
@@ -1060,7 +1061,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [desktopReady, setDesktopReady] = useState(false);
   const [glassPaintPass, setGlassPaintPass] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
-  const [activeApp, setActiveApp] = useState<DesktopIconId | null>(null);
+  const [activeApp, setActiveApp] = useState<DesktopIconId | null>(() => isResumingPersona() ? "chat" : null);
   const [customApps, setCustomApps] = useState<InstalledCustomApp[]>([]);
   // 自定义 APP 桌面图标样式偏好（global = 忽略上传图标走全局效果）
   const [customAppIconStyles, setCustomAppIconStyles] = useState<Record<string, CustomAppIconStyle>>({});

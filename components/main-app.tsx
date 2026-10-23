@@ -1,5 +1,6 @@
 "use client";
 
+import { isResumingPersona } from "@/lib/persona-navigation";
 import { useEffect, useState } from "react";
 import { ArrowRight } from "lucide-react";
 
@@ -230,6 +231,8 @@ export function MainApp() {
   const [preparedDesktopTheme, setPreparedDesktopTheme] = useState<PreparedDesktopTheme | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [splashDismissed, setSplashDismissed] = useState(false);
+  const [resumePersona, setResumePersona] = useState(false);
+  useEffect(() => { setResumePersona(isResumingPersona()); }, []);
   const [kvHydrateFailed, setKvHydrateFailed] = useState(false);
   const [initAttempt, setInitAttempt] = useState(0);
 
@@ -308,7 +311,9 @@ export function MainApp() {
 
   return (
     <AccountGate>
-      {!splashDismissed ? (
+      {resumePersona && !hydrated ? (
+        <main className="app-root" role="status" style={{ display: "grid", placeItems: "center", minHeight: "100dvh", background: "var(--c-page-body-bg)", color: "var(--c-text-title)" }}>正在切换人设…</main>
+      ) : !splashDismissed && !resumePersona ? (
         <SplashScreen ready={hydrated} onEnter={() => setSplashDismissed(true)} />
       ) : (
         <main className="app-root">
@@ -317,7 +322,7 @@ export function MainApp() {
               initialThemeProfile={preparedDesktopTheme?.profile}
               initialThemeAssets={preparedDesktopTheme?.assets}
             />
-            <OfflinePushRevampAnnouncement />
+            {!resumePersona && <OfflinePushRevampAnnouncement />}
             <CloudBackupScheduler />
             <RealityBridgeScheduler />
             <MediaMaintenanceScheduler />
