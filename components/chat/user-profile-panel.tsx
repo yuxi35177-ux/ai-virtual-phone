@@ -158,6 +158,11 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
     const [showMomentsSettings, setShowMomentsSettings] = useState(false);
     const [showWalletPanel, setShowWalletPanel] = useState(false);
     const [identity, setIdentity] = useState<UserIdentity | null>(null);
+    useEffect(() => {
+      const sync = () => setIdentity(resolveUserIdentity());
+      window.addEventListener("user-identities-updated", sync);
+      return () => window.removeEventListener("user-identities-updated", sync);
+    }, []);
     const [notifEnabled, setNotifEnabled] = useState(false);
     const [notifHint, setNotifHint] = useState<string | null>(null);
     const [notifChecking, setNotifChecking] = useState(false);
