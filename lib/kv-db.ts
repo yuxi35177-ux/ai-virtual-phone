@@ -174,6 +174,17 @@ export function hydrateKvDb(): Promise<void> {
         for (const k of removeKeys) personaLocalStorage.removeItem(k);
         // Pin the upgrade's current identity to the existing, unchanged databases.
         const registry = initializePersonaRegistry(_cache.get("ai_phone_user_identities_v1") ?? personaLocalStorage.getItem("ai_phone_user_identities_v1"), _cache.get("ai_phone_bindings_v1") ?? personaLocalStorage.getItem("ai_phone_bindings_v1"));
+        // Give an originally unset identity an editable card without reassigning
+        // its existing records to the next identity the user creates.
+        if (registry.ownerId === "__legacy_unset__") {
+            const identities = JSON.parse(_cache.get("ai_phone_user_identities_v1") || "[]") as { id: string }[];
+            if (!identities.some(i => i.id === registry.ownerId)) {
+                const original = { id: registry.ownerId, name: "未设置身份", bio: "", gender: "", age: "", occupation: "", customSettings: "" };
+                const value = JSON.stringify([original, ...identities]);
+                await sharedDb.entries.put({ key: "ai_phone_user_identities_v1", value });
+                _cache.set("ai_phone_user_identities_v1", value);
+            }
+        }
         await sharedDb.entries.put({ key: PERSONA_REGISTRY_KEY, value: JSON.stringify(registry) });
     })().then(() => {
         _hydrated = true;
