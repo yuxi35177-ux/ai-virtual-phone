@@ -686,6 +686,11 @@ export async function scanAllStorageStrings(scan: StorageStringScanner, excludeD
       }
     }
   }
+  // Shared assets may still be referenced by an inactive persona's archive.
+  // Scan every archive before deciding a theme asset is orphaned.
+  for (const db of await indexedDB.databases()) {
+    if (db.name && !excluded.has(db.name)) indexedDbNames.add(db.name);
+  }
   for (const dbName of indexedDbNames) {
     await scanIndexedDbSourceWithScanner(dbName, scan).catch(() => undefined);
   }

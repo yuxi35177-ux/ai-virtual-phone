@@ -1,3 +1,4 @@
+import { currentPersonaRegistry } from "./persona-scope";
 import type {
     GenerationParameterKey,
     PresetConfig,
@@ -1031,6 +1032,8 @@ export function resolveBinding(
         if (slot.regexIds && slot.regexIds.length > 0) resolved.regexIds = [...slot.regexIds];
     };
 
+    const persona = currentPersonaRegistry();
+    if (persona) resolved.userIdentityId = persona.activeId;
     if (!characterId) return resolved;
 
     // Apply character defaults
@@ -1047,6 +1050,7 @@ export function resolveBinding(
         applySlot(charBinding.appOverrides[appId]!);
     }
 
+    if (persona) resolved.userIdentityId = persona.activeId;
     return resolved;
 }
 
@@ -1189,6 +1193,8 @@ export function saveUserIdentities(identities: UserIdentity[]): void {
  */
 export function resolveUserIdentity(characterId?: string, appId?: string): UserIdentity | null {
     const identities = loadUserIdentities();
+    const persona = currentPersonaRegistry();
+    if (persona) return identities.find(i => i.id === persona.activeId) || null;
     if (identities.length === 0) return null;
     const config = loadBindingConfig();
     const resolved = resolveBinding(config, characterId, appId);

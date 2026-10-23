@@ -1,3 +1,4 @@
+import { personaDatabaseName, SHARED_PERSONA_KEYS } from "./persona-scope";
 import type { CompositeToolConfig, CompositeToolPackageConfig, CompositeToolStep } from "./settings-types";
 
 export const BUILTIN_PHONE_WORKFLOW_PACKAGE_ID = "builtin_phone_lookup_workflows";
@@ -126,6 +127,8 @@ function openIndexedDb(name) {
             resolve(null);
             return;
         }
+        if (name === "AiPhoneKvDB_shared") name = "AiPhoneKvDB";
+        else name = ${JSON.stringify(Object.fromEntries(["AiPhoneKvDB", "AiPhoneChatDB"].map(n => [n, personaDatabaseName(n)])))}[name] || name;
         var request = indexedDB.open(name);
         request.onsuccess = function () { resolve(request.result); };
         request.onerror = function () { resolve(null); };
@@ -134,7 +137,7 @@ function openIndexedDb(name) {
 }
 
 async function readPhoneKv(key) {
-    var db = await openIndexedDb("AiPhoneKvDB");
+    var db = await openIndexedDb(${JSON.stringify(Array.from(SHARED_PERSONA_KEYS))}.includes(key) ? "AiPhoneKvDB_shared" : "AiPhoneKvDB");
     if (db && Array.from(db.objectStoreNames).includes("entries")) {
         try {
             var transaction = db.transaction("entries", "readonly");
@@ -145,7 +148,8 @@ async function readPhoneKv(key) {
         }
     }
     if (typeof window !== "undefined" && window.localStorage) {
-        return window.localStorage.getItem(key);
+        var prefix = ${JSON.stringify(personaDatabaseName("AiPhoneKvDB"))};
+        return window.localStorage.getItem(prefix === "AiPhoneKvDB" || ${JSON.stringify(Array.from(SHARED_PERSONA_KEYS))}.includes(key) ? key : prefix + ":" + key);
     }
     return null;
 }

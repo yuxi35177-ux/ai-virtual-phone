@@ -1,3 +1,4 @@
+import { personaDatabaseName } from "./persona-scope";
 import Dexie from "dexie";
 
 // ── Types ──────────────────────────────────────
@@ -63,7 +64,7 @@ class DwellingDatabase extends Dexie {
     itemHtml!: Dexie.Table<DwellingItemHtmlRow, string>;
 
     constructor() {
-        super("AiPhoneDwellingDB");
+        super(personaDatabaseName("AiPhoneDwellingDB"));
         this.version(3).stores({
             layouts: "characterId",
             itemHtml: "id, characterId",

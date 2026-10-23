@@ -1,3 +1,4 @@
+import { personaDatabaseName } from "./persona-scope";
 import Dexie from "dexie";
 import { formatChatTimestamp } from "./llm-prompt-assembler";
 
@@ -46,7 +47,7 @@ class StoryDatabase extends Dexie {
   messages!: Dexie.Table<StoryMessage, string>;
 
   constructor() {
-    super("AiPhoneStoryDB");
+    super(personaDatabaseName("AiPhoneStoryDB"));
     this.version(1).stores({
       sessions: "id, characterId, updatedAt",
       messages: "id, sessionId, createdAt",

@@ -1,3 +1,4 @@
+import { personaDatabaseName, personaLocalStorage, SHARED_PERSONA_KEYS, initializePersonaRegistry, PERSONA_REGISTRY_KEY, readPersonaRegistry } from "./persona-scope";
 // lib/kv-db.ts
 // Generic IndexedDB-backed key-value store with synchronous in-memory cache.
 // Replaces all localStorage usage to avoid the ~5-10MB quota limit.
@@ -6,13 +7,15 @@ import Dexie from "dexie";
 
 class KvDatabase extends Dexie {
     entries!: Dexie.Table<{ key: string; value: string }, string>;
-    constructor() {
-        super("AiPhoneKvDB");
+    constructor(name = personaDatabaseName("AiPhoneKvDB")) {
+        super(name);
         this.version(1).stores({ entries: "key" });
     }
 }
 
 const kvDb = new KvDatabase();
+const sharedDb = kvDb.name === "AiPhoneKvDB" ? kvDb : new KvDatabase("AiPhoneKvDB");
+const databaseForKey = (key: string) => SHARED_PERSONA_KEYS.has(key) ? sharedDb : kvDb;
 
 // ── In-memory cache ──
 const _cache = new Map<string, string>();
@@ -38,23 +41,23 @@ export function registerDynamicPrefix(prefix: string): void {
 }
 
 // Migrate a single legacy localStorage key into the cache + IDB, then drop it
-// from localStorage. Used by both initial hydration and late registration.
+// from personaLocalStorage. Used by both initial hydration and late registration.
 function migrateLegacyKey(lsKey: string): void {
     if (typeof window === "undefined") return;
-    const raw = localStorage.getItem(lsKey);
+    const raw = personaLocalStorage.getItem(lsKey);
     if (raw === null) return;
     if (_cache.get(lsKey) !== raw) {
         _cache.set(lsKey, raw);
-        kvDb.entries.put({ key: lsKey, value: raw }).catch(() => {});
+        databaseForKey(lsKey).entries.put({ key: lsKey, value: raw }).catch(() => {});
     }
-    localStorage.removeItem(lsKey);
+    personaLocalStorage.removeItem(lsKey);
 }
 
 function migrateLegacyPrefix(prefix: string): void {
     if (typeof window === "undefined") return;
     const matched: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
+    for (let i = 0; i < personaLocalStorage.length; i++) {
+        const k = personaLocalStorage.key(i);
         if (k && k.startsWith(prefix)) matched.push(k);
     }
     for (const k of matched) migrateLegacyKey(k);
@@ -71,7 +74,7 @@ function isManagedLegacyKey(key: string): boolean {
 function removeLegacyLocalStorageKey(key: string): void {
     if (typeof window === "undefined") return;
     try {
-        localStorage.removeItem(key);
+        personaLocalStorage.removeItem(key);
     } catch {
         // Ignore localStorage cleanup failures; IndexedDB remains the source of truth.
     }
@@ -80,7 +83,7 @@ function removeLegacyLocalStorageKey(key: string): void {
 function removeLegacyLocalStorageKeyIfValue(key: string, value: string): void {
     if (typeof window === "undefined") return;
     try {
-        if (localStorage.getItem(key) === value) localStorage.removeItem(key);
+        if (personaLocalStorage.getItem(key) === value) personaLocalStorage.removeItem(key);
     } catch {
         // Ignore localStorage cleanup failures; IndexedDB remains the source of truth.
     }
@@ -94,7 +97,7 @@ function writeFallbackLocalStorage(key: string, value: string): void {
     if (typeof window === "undefined" || !isManagedLegacyKey(key)) return;
     if (value.length > LOCAL_STORAGE_MIRROR_MAX_LENGTH) return;
     try {
-        localStorage.setItem(key, value);
+        personaLocalStorage.setItem(key, value);
     } catch {
         // Ignore fallback persistence failures; in-memory cache is already updated.
     }
@@ -120,7 +123,17 @@ export function hydrateKvDb(): Promise<void> {
     if (_hydratePromise) return _hydratePromise;
     _hydratePromise = (async () => {
         // Load existing IDB data into cache
-        const all = await kvDb.entries.toArray();
+        const recovery = await sharedDb.entries.get(PERSONA_REGISTRY_KEY);
+        if (!readPersonaRegistry() && recovery) {
+            window.localStorage.setItem(PERSONA_REGISTRY_KEY, recovery.value);
+            window.location.reload();
+            throw new Error("正在恢复人设索引，请稍候。");
+        }
+        const all = (await kvDb.entries.toArray()).filter(row => sharedDb === kvDb || !SHARED_PERSONA_KEYS.has(row.key));
+        if (sharedDb !== kvDb) {
+            const shared = await sharedDb.entries.toArray();
+            all.push(...shared.filter(row => SHARED_PERSONA_KEYS.has(row.key)));
+        }
         for (const { key, value } of all) {
             if (!_cache.has(key)) _cache.set(key, value);
         }
@@ -131,7 +144,7 @@ export function hydrateKvDb(): Promise<void> {
 
         // Fixed keys
         for (const lsKey of _fixedKeys) {
-            const raw = localStorage.getItem(lsKey);
+            const raw = personaLocalStorage.getItem(lsKey);
             if (raw === null) continue;
             if (_cache.get(lsKey) !== raw) {
                 batch.push({ key: lsKey, value: raw });
@@ -141,10 +154,10 @@ export function hydrateKvDb(): Promise<void> {
         }
 
         // Dynamic prefix keys
-        for (let i = 0; i < localStorage.length; i++) {
-            const k = localStorage.key(i);
+        for (let i = 0; i < personaLocalStorage.length; i++) {
+            const k = personaLocalStorage.key(i);
             if (!k || !matchesDynamicPrefix(k)) continue;
-            const raw = localStorage.getItem(k);
+            const raw = personaLocalStorage.getItem(k);
             if (raw !== null) {
                 if (_cache.get(k) !== raw) {
                     batch.push({ key: k, value: raw });
@@ -154,8 +167,14 @@ export function hydrateKvDb(): Promise<void> {
             }
         }
 
-        if (batch.length > 0) await kvDb.entries.bulkPut(batch);
-        for (const k of removeKeys) localStorage.removeItem(k);
+        if (batch.length > 0) {
+            await kvDb.entries.bulkPut(batch.filter(row => databaseForKey(row.key) === kvDb));
+            if (sharedDb !== kvDb) await sharedDb.entries.bulkPut(batch.filter(row => databaseForKey(row.key) === sharedDb));
+        }
+        for (const k of removeKeys) personaLocalStorage.removeItem(k);
+        // Pin the upgrade's current identity to the existing, unchanged databases.
+        const registry = initializePersonaRegistry(_cache.get("ai_phone_user_identities_v1") ?? null, _cache.get("ai_phone_bindings_v1") ?? null);
+        await sharedDb.entries.put({ key: PERSONA_REGISTRY_KEY, value: JSON.stringify(registry) });
     })().then(() => {
         _hydrated = true;
         _hydrateError = null;
@@ -192,7 +211,7 @@ export function kvGet(key: string): string | null {
 export function kvSet(key: string, value: string): void {
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
-    kvDb.entries.put({ key, value }).then(() => {
+    databaseForKey(key).entries.put({ key, value }).then(() => {
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     }).catch(err => {
         writeFallbackLocalStorage(key, value);
@@ -206,7 +225,7 @@ export async function kvSetAsync(key: string, value: string): Promise<void> {
     _cache.set(key, value);
     if (isManagedLegacyKey(key)) writeFallbackLocalStorage(key, value);
     try {
-        await kvDb.entries.put({ key, value });
+        await databaseForKey(key).entries.put({ key, value });
         if (isManagedLegacyKey(key)) removeLegacyLocalStorageKeyIfValue(key, value);
     } catch (err) {
         writeFallbackLocalStorage(key, value);
@@ -221,7 +240,7 @@ export async function kvSetAsync(key: string, value: string): Promise<void> {
 export function kvRemove(key: string): void {
     _cache.delete(key);
     if (isManagedLegacyKey(key)) removeLegacyLocalStorageKey(key);
-    kvDb.entries.delete(key).catch(err =>
+    databaseForKey(key).entries.delete(key).catch(err =>
         console.warn("[KvDB] delete failed:", key, err));
 }
 

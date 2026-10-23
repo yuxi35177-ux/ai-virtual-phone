@@ -1,3 +1,4 @@
+import { personaDatabaseName } from "./persona-scope";
 // lib/reading-storage.ts — Dexie IndexedDB persistence for Reading feature.
 
 import Dexie from "dexie";
@@ -15,7 +16,7 @@ class ReadingDB extends Dexie {
     rawFiles!: Dexie.Table<{ bookId: string; data: Blob }, string>;
 
     constructor() {
-        super("reading-db");
+        super(personaDatabaseName("reading-db"));
         this.version(1).stores({
             books: "id",
             chapters: "id, bookId, [bookId+index]",
@@ -49,7 +50,7 @@ let _annotationsCache: Map<string, ReadingAnnotation[]> = new Map(); // key: boo
 
 const READING_INTERACTION_CONFIG_KEY = "ai_phone_reading_interaction_config_v1";
 registerKvMigration(READING_INTERACTION_CONFIG_KEY);
-const RAW_FILE_DB_NAME = "reading-raw-files";
+const RAW_FILE_DB_NAME = personaDatabaseName("reading-raw-files");
 const RAW_FILE_STORE_NAME = "files";
 
 /** TXT 导入时的段落划分方式：auto=智能探测（默认）/ blank=空行 / indent=段首缩进 / line=每行一段 */
