@@ -1,3 +1,5 @@
+import { realtimeContext } from "./realtime-device";
+import { maybeBuildStatusInjection } from "./perception/describe";
 // lib/chat-engine.ts
 
 import { createSseJsonParser } from "./sse-json";
@@ -347,6 +349,7 @@ export type DebugPromptRequestOptions = {
 };
 
 type ChatPromptBuildOptions = {
+    ephemeralSystemNote?: string;
     followUpCount?: number;
     followUpDelay?: number;
     timedWakeElapsedMinutes?: number;
@@ -1994,6 +1997,16 @@ export async function buildChatPromptMessages(
         });
     }
     appendEmptyGenerateGuardMessage(llmMessages, config, historyForPrompt);
+    if (options?.ephemeralSystemNote) llmMessages.push({ role: "system", content: options.ephemeralSystemNote.slice(0,3000) });
+    if (!isOfflineMode) {
+        const realtime = realtimeContext();
+        if (realtime) llmMessages.push({ role: "system", content: realtime });
+    }
+    if (!isOfflineMode) {
+        const perception = maybeBuildStatusInjection();
+        if (perception) llmMessages.push({ role: "system", content: perception });
+    }
+
 
     return { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled };
 }

@@ -261,6 +261,7 @@ export type ChatMessage = {
 };
 
 export type ChatAppSettings = {
+    shellNotificationsEnabled?: boolean;
     globalAppBackground?: string; // base64 or URL
     timeAware?: boolean; // When true, inject timestamps into prompt so AI knows message timing (default: true)
     promptViewerEnabled?: boolean; // When true, show the floating prompt viewer entry

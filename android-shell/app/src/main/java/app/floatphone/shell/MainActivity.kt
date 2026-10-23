@@ -3,53 +3,132 @@ package app.floatphone.shell
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Base64
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import androidx.core.app.NotificationCompat
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.health.connect.client.PermissionController
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import java.io.File
+import java.io.FileOutputStream
 
-/**
- * Float 小手机安卓壳：全屏 WebView 直接加载线上站点。
- * 网页每次部署即时生效，本壳只负责原生能力（推送长连接、文件上下行、外链）。
- */
 class MainActivity : AppCompatActivity() {
+    private var localApiBridge: LocalApiBridge? = null
 
     companion object {
         val SITE_URL: String = BuildConfig.SITE_URL
-        const val VERSION = "1.0.0"
-        /** 来电接听等场景的站内深链（必须以 SITE_URL 开头，否则忽略） */
+        val VERSION: String = BuildConfig.VERSION_NAME
         const val EXTRA_OPEN_URL = "open_url"
+        const val DEEP_LINK_SCHEME = "floatshell"
+        const val CH_MESSAGES = "shell_messages"
     }
 
+    private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    @Volatile
+    private var statusBarHeightCssPx: Int = 0
+
+    private var imeInsetPx: Int = 0
+    private var webNotifId = 500
+
+    private val realtime by lazy { RealtimeBridge(this) }
+    private val perception by lazy { PerceptionBridge(this) }
+    private val deviceAction by lazy { DeviceActionBridge(this) }
+    private val calendar by lazy { CalendarBridge(this) }
+    private val locationBridge by lazy { LocationBridge(this) }
+    private val healthBridge by lazy { HealthBridge(this) }
+
+    private val healthPermissionLauncher = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { grantedPermissions ->
+        healthPermissionGranted = grantedPermissions.contains(HealthBridge.PERM_SLEEP)
+    }
+
+    @Volatile
+    private var healthPermissionGranted = false
+
+    private val locationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
+    private val calendarPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
+    @Volatile
+    private var stepPermissionGranted = false
+
+    private val stepPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        stepPermissionGranted = granted
+        if (granted) PerceptionBridge.attachStepSensor(this)
+    }
+
+    private val avatarClient = OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
-        val data = result.data?.data
-        callback.onReceiveValue(if (data != null) arrayOf(data) else emptyArray())
+        callback.onReceiveValue(collectChosenUris(result))
+    }
+
+    private fun collectChosenUris(result: ActivityResult): Array<Uri> {
+        if (result.resultCode != android.app.Activity.RESULT_OK) return emptyArray()
+        val data = result.data ?: return emptyArray()
+        val uris = mutableListOf<Uri>()
+        data.clipData?.let { clip ->
+            for (index in 0 until clip.itemCount) {
+                clip.getItemAt(index)?.uri?.let { uris.add(it) }
+            }
+        }
+        data.data?.let { uris.add(it) }
+        return uris.distinct().toTypedArray()
     }
 
     private val notifPermissionLauncher = registerForActivityResult(
@@ -58,9 +137,6 @@ class MainActivity : AppCompatActivity() {
         if (granted) PushService.start(this)
     }
 
-    // 网页侧 getUserMedia（通话按住说话、语音条录音、视频通话摄像头）触发的
-    // WebView 权限请求：先要系统运行时权限，拿到后再转授给页面。
-    // 不实现 onPermissionRequest 时 WebView 会静默拒绝，页面永远拿不到麦克风。
     private var pendingWebPermissionRequest: android.webkit.PermissionRequest? = null
 
     private val webPermissionLauncher = registerForActivityResult(
@@ -82,16 +158,54 @@ class MainActivity : AppCompatActivity() {
         else -> emptyList()
     }
 
+    private fun safeDownloadName(fileName: String): String {
+        val cleaned = fileName
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .trim()
+            .ifBlank { "download" }
+        val dot = cleaned.lastIndexOf('.')
+        val stem = if (dot > 0) cleaned.substring(0, dot) else cleaned
+        val ext = if (dot > 0) cleaned.substring(dot) else ""
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        var candidate = stem.take(100) + ext
+        var index = 1
+        while (File(dir, candidate).exists() && index < 100) {
+            candidate = stem.take(100) + "($index)" + ext
+            index++
+        }
+        return candidate
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
-        // 音量键默认调媒体流：WebView 里的语音条/TTS 都走媒体流播放，
-        // 不设的话短音频没在播时按键调的是铃声，用户感觉"音量键无效、声音巨大"
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableDisplayCutoutCover()
+        enableHighRefreshRate()
+        hideSystemStatusBar()
         volumeControlStream = AudioManager.STREAM_MUSIC
 
-        webView = WebView(this)
-        setContentView(webView)
+        webView = WebView(this).apply {
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+        }
+        // 关闭远程调试钩子，释放 WebView 渲染帧率
+        WebView.setWebContentsDebuggingEnabled(false)
+
+        rootContainer = FrameLayout(this).apply {
+            addView(
+                webView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+        setContentView(rootContainer)
+        observeWindowInsets()
+        ViewCompat.requestApplyInsets(rootContainer)
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -99,20 +213,29 @@ class MainActivity : AppCompatActivity() {
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = false
+            cacheMode = WebSettings.LOAD_DEFAULT
             userAgentString = "$userAgentString FloatShell/$VERSION"
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
 
+        localApiBridge = LocalApiBridge(webView, SITE_URL).also { it.attach() }
         webView.addJavascriptInterface(ShellBridge(), "AndroidShell")
+        webView.addJavascriptInterface(PhoneWidgetBridge(), "PhoneWidget")
+        PerceptionBridge.attachStepSensor(this)
+        ShellBus.webView = webView
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                localApiBridge?.cancelAll()
+                super.onPageStarted(view, url, favicon)
+            }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 val scheme = url.scheme ?: return false
-                // 站内导航留在壳里；http(s) 外链和自定义协议（shortcuts:// 等）交给系统
                 if (scheme == "http" || scheme == "https") {
-                    if (url.host == Uri.parse(SITE_URL).host) return false
+                    val allowed = Uri.parse(SITE_URL)
+                    if (url.scheme == allowed.scheme && url.host == allowed.host && url.port == allowed.port) return false
                     return runCatching {
                         startActivity(Intent(Intent.ACTION_VIEW, url)); true
                     }.getOrDefault(true)
@@ -120,6 +243,12 @@ class MainActivity : AppCompatActivity() {
                 return runCatching {
                     startActivity(Intent(Intent.ACTION_VIEW, url)); true
                 }.getOrDefault(true)
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                super.onPageFinished(view, url)
+                injectStatusBarHeight()
+                injectNativeEnhancer()
             }
         }
 
@@ -144,18 +273,20 @@ class MainActivity : AppCompatActivity() {
                 filePathCallback?.onReceiveValue(emptyArray())
                 filePathCallback = callback
                 return runCatching {
-                    fileChooserLauncher.launch(params.createIntent()); true
+                    val intent = params.createIntent()
+                    if (params.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    fileChooserLauncher.launch(intent); true
                 }.getOrElse {
                     filePathCallback = null; false
                 }
             }
         }
 
-        // 备份导出等下载：交给系统下载管理器，落到公共下载目录
         webView.setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             runCatching {
                 if (url.startsWith("blob:") || url.startsWith("data:")) {
-                    // blob/data 由页面内 JS 触发的 a[download] 处理；提示用户等待
                     Toast.makeText(this, "正在导出…", Toast.LENGTH_SHORT).show()
                     return@DownloadListener
                 }
@@ -165,7 +296,7 @@ class MainActivity : AppCompatActivity() {
                     setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     setDestinationInExternalPublicDir(
                         Environment.DIRECTORY_DOWNLOADS,
-                        android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType),
+                        safeDownloadName(android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)),
                     )
                 }
                 (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
@@ -173,35 +304,219 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        // 接管 vivo 等系统的左右边缘侧滑返回手势：优先触发小手机内部返回按钮，不直接退回手机桌面
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                webView.evaluateJavascript(
-                    "!window.dispatchEvent(new Event('floatphone:back', {cancelable:true}))"
-                ) { handled ->
-                    // The webpage owns its React subpages and keeps the phone desktop open.
-                    if (handled != "true" && webView.canGoBack()) webView.goBack()
-                }
+                requestWebBack()
             }
         })
 
-        // 冷启动带深链（如来电接听）直接加载目标；否则加载首页
+        realtime.consumeIntent(intent)
         webView.loadUrl(consumeOpenUrl(intent) ?: SITE_URL)
         ensurePushService()
     }
 
-    /** singleTask：App 已在运行时（如全屏来电页接听）通过 onNewIntent 送达深链 */
+    /** 向系统申请最高屏幕刷新率（如 vivo S17 的 120Hz 模式），解除系统对自编译 WebView 默认 60Hz 锁帧 */
+    private fun enableHighRefreshRate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching {
+                val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    this.display
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay
+                }
+                val modes = display?.supportedModes ?: return
+                val bestMode = modes.maxByOrNull { it.refreshRate } ?: return
+                window.attributes = window.attributes.apply {
+                    preferredDisplayModeId = bestMode.modeId
+                }
+            }
+        }
+    }
+
+    // Edge touch fallback for devices whose system gesture does not reach Back.
+    // Once horizontal intent is clear, cancel WebView's touch stream before acting.
+    private var edgeSwipeStartX = 0f
+    private var edgeSwipeStartY = 0f
+    private var edgeSwipeDirection = 1f
+    private var edgeSwipeTracking = false
+    private var edgeSwipeClaimed = false
+    private var edgeGestureId = 0
+    private var lastBackAt = 0L
+    private var backPending = false
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val density = resources.displayMetrics.density
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                edgeSwipeStartX = event.x
+                edgeSwipeDirection = if (event.x <= resources.displayMetrics.widthPixels / 2f) 1f else -1f
+                edgeSwipeStartY = event.y
+                edgeGestureId++
+                val gestureId = edgeGestureId
+                edgeSwipeTracking = false
+                edgeSwipeClaimed = false
+                if (event.pointerCount == 1 && (event.x <= 20f * density || event.x >= resources.displayMetrics.widthPixels - 20f * density) && imeInsetPx == 0 && ::webView.isInitialized) {
+                    val x = event.x / density
+                    val y = event.y / density
+                    webView.evaluateJavascript("(typeof window.floatShellCanStartBack==='function' && window.floatShellCanStartBack($x,$y))") { eligible ->
+                        if (gestureId == edgeGestureId) edgeSwipeTracking = eligible == "true"
+                    }
+                }
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> { edgeGestureId++; edgeSwipeTracking = false }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = (event.x - edgeSwipeStartX) * edgeSwipeDirection
+                val dy = kotlin.math.abs(event.y - edgeSwipeStartY)
+                if (edgeSwipeTracking && !edgeSwipeClaimed) {
+                    if (dy > 12f * density && dy > dx * 0.5f || dx < -12f * density) edgeSwipeTracking = false
+                    else if (dx > 24f * density && dy < dx * 0.4f) {
+                        edgeSwipeClaimed = true
+                        val cancel = MotionEvent.obtain(event)
+                        cancel.action = MotionEvent.ACTION_CANCEL
+                        super.dispatchTouchEvent(cancel)
+                        cancel.recycle()
+                    }
+                }
+                if (edgeSwipeClaimed) return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                edgeGestureId++
+                val claimed = edgeSwipeClaimed
+                val back = event.actionMasked == MotionEvent.ACTION_UP && claimed &&
+                    (event.x - edgeSwipeStartX) * edgeSwipeDirection >= 80f * density &&
+                    kotlin.math.abs(event.y - edgeSwipeStartY) < (event.x - edgeSwipeStartX) * edgeSwipeDirection * 0.4f
+                edgeSwipeTracking = false
+                edgeSwipeClaimed = false
+                if (back) requestWebBack()
+                if (claimed) return true
+            }
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun requestWebBack() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (backPending || now - lastBackAt < 400L) return
+        lastBackAt = now
+        if (imeInsetPx > 0) {
+            WindowInsetsControllerCompat(window, rootContainer).hide(WindowInsetsCompat.Type.ime())
+            return
+        }
+        backPending = true
+        webView.evaluateJavascript("(function(){try{return typeof window.floatShellBack==='function' ? window.floatShellBack() : null;}catch(e){return null;}})()") { result ->
+            backPending = false
+            // No JS handler (loading/login) is deliberately a no-op. Never exit.
+            if (result == "false" && webView.canGoBack()) {
+                val list = webView.copyBackForwardList()
+                val previous = list.getItemAtIndex(list.currentIndex - 1)?.url
+                val current = Uri.parse(SITE_URL)
+                val target = previous?.let { Uri.parse(it) }
+                if (target != null && target.scheme == current.scheme && target.host == current.host && target.port == current.port) webView.goBack()
+            }
+        }
+    }
+
+    /** 原生层直接注入性能优化与小红书解析脚本，无视 sw.js 离线缓存拦截 */
+    private fun injectNativeEnhancer() {
+        if (!::webView.isInitialized) return
+        val js = """
+            (function() {
+                if (window.__NATIVE_SHELL_BOOST__) return;
+                window.__NATIVE_SHELL_BOOST__ = true;
+                var s = document.createElement('script');
+                s.src = '/float-enhancer.js?t=' + Date.now();
+                s.defer = true;
+                document.head.appendChild(s);
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    override fun onResume() { super.onResume(); realtime.resumeNfc() }
+    override fun onPause() { realtime.pauseNfc(); super.onPause() }
+
     override fun onNewIntent(intent: Intent) {
+        realtime.consumeIntent(intent)
         super.onNewIntent(intent)
         setIntent(intent)
         val target = consumeOpenUrl(intent) ?: return
-        // SPA 已加载：loadUrl 到同页 hash 只触发 hashchange，不会整页重载
         webView.loadUrl(target)
     }
 
     private fun consumeOpenUrl(intent: Intent?): String? {
-        val target = intent?.getStringExtra(EXTRA_OPEN_URL) ?: return null
+        if (intent == null) return null
+        val extra = intent.getStringExtra(EXTRA_OPEN_URL)
         intent.removeExtra(EXTRA_OPEN_URL)
-        return target.takeIf { it.startsWith(SITE_URL) }
+        if (extra != null) return extra.takeIf { it.startsWith(SITE_URL) }
+        val data = intent.data
+        if (data != null && data.scheme == DEEP_LINK_SCHEME) {
+            intent.data = null
+            return data.getQueryParameter("url").orEmpty().takeIf { it.startsWith(SITE_URL) }
+        }
+        return null
+    }
+
+    private fun enableDisplayCutoutCover() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+    }
+
+    private fun hideSystemStatusBar() {
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.statusBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    private fun observeWindowInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
+            val statusBarPx = insets
+                .getInsetsIgnoringVisibility(WindowInsetsCompat.Type.statusBars()).top
+            val density = resources.displayMetrics.density
+            val cssPx = (statusBarPx / density).toInt()
+            if (cssPx > 0 && cssPx != statusBarHeightCssPx) {
+                statusBarHeightCssPx = cssPx
+                injectStatusBarHeight()
+            }
+
+            val imePx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            if (imePx != imeInsetPx) {
+                imeInsetPx = imePx
+                if (::rootContainer.isInitialized) rootContainer.setPadding(0, 0, 0, imePx)
+            }
+            insets
+        }
+    }
+
+    private fun injectStatusBarHeight() {
+        if (!::webView.isInitialized || statusBarHeightCssPx <= 0) return
+        val js = "document.documentElement.style.setProperty('--android-shell-status-bar-height', '${statusBarHeightCssPx}px');" +
+            "window.dispatchEvent(new CustomEvent('floatshell-statusbarheight', { detail: $statusBarHeightCssPx }));"
+        webView.evaluateJavascript(js, null)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemStatusBar()
+    }
+
+    private fun contentIntent(sessionId: String? = null): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val id = sessionId?.trim().orEmpty()
+        if (id.isNotEmpty()) {
+            intent.putExtra(EXTRA_OPEN_URL, "${SITE_URL.trimEnd('/')}/#open-chat=${Uri.encode(id)}")
+        }
+        return PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 
     private fun ensurePushService() {
@@ -215,18 +530,426 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        CallOverlayService.onHostBackground()
+        CheckInService.onHostBackground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        CallOverlayService.onHostForeground()
+        CheckInService.onHostForeground()
+    }
+
     override fun onDestroy() {
+        localApiBridge?.cancelAll()
+        if (ShellBus.webView === webView) ShellBus.webView = null
         CookieManager.getInstance().flush()
         webView.destroy()
         super.onDestroy()
     }
 
-    /** 暴露给网页的原生桥（网页侧可用 window.AndroidShell 特性检测壳环境）。 */
     inner class ShellBridge {
         @JavascriptInterface
         fun getVersion(): String = VERSION
 
-        /** 打开本应用的系统设置页（引导用户关电池限制、开自启动）。 */
+        @JavascriptInterface
+        fun getStatusBarHeightPx(): Int = statusBarHeightCssPx
+
+        @JavascriptInterface
+        fun configureRealtime(json: String): Boolean = realtime.configure(json)
+        @JavascriptInterface fun getRealtimeSnapshot(): String = realtime.snapshot()
+        @JavascriptInterface fun requestRealtimePermission(key: String) { realtime.permission(key) }
+        @JavascriptInterface fun clearRealtime() { realtime.clear() }
+        @JavascriptInterface fun requestCharacterVibration(): Boolean = realtime.vibrate()
+        @JavascriptInterface fun requestContactsPermission() { runOnUiThread { androidx.core.app.ActivityCompat.requestPermissions(this@MainActivity, arrayOf(Manifest.permission.READ_CONTACTS), 410) } }
+        @JavascriptInterface fun lookupContact(number: String): String {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return ""
+            val cleaned = number.filter { it.isDigit() || it == '+' }.take(30)
+            if (cleaned.length < 3) return ""
+            return runCatching {
+                val uri = Uri.withAppendedPath(android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(cleaned))
+                contentResolver.query(uri, arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0).take(80) else "" } ?: ""
+            }.getOrDefault("")
+        }
+
+        @JavascriptInterface
+        fun getPerceptionSnapshot(): String = perception.snapshotJson()
+
+        @JavascriptInterface
+        fun getAppLabel(packageName: String): String = perception.appLabel(packageName)
+
+        @JavascriptInterface
+        fun getPerceptionCapabilities(): String = perception.capabilitiesJson()
+
+        @JavascriptInterface
+        fun readUsageStats(maxEntries: Int): String = perception.usageStatsJson(maxEntries)
+
+        @JavascriptInterface
+        fun hasStepPermission(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+            || ContextCompat.checkSelfPermission(
+                this@MainActivity,
+                Manifest.permission.ACTIVITY_RECOGNITION,
+            ) == PackageManager.PERMISSION_GRANTED
+
+        @JavascriptInterface
+        fun requestStepPermission(): Boolean {
+            if (hasStepPermission()) {
+                PerceptionBridge.attachStepSensor(this@MainActivity)
+                return true
+            }
+            runCatching { stepPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) }
+            return false
+        }
+
+        @JavascriptInterface
+        fun setTorch(on: Boolean): String = deviceAction.setTorch(on).toString()
+
+        @JavascriptInterface
+        fun isTorchOn(): Boolean = deviceAction.isTorchOn()
+
+        @JavascriptInterface
+        fun setVolume(stream: String, action: String, level: Int): String =
+            deviceAction.setVolume(stream, action, level).toString()
+
+        @JavascriptInterface
+        fun setBrightness(level: Int): String = deviceAction.setBrightness(level).toString()
+
+        @JavascriptInterface
+        fun setDnd(on: Boolean): String = deviceAction.setDnd(on).toString()
+
+        @JavascriptInterface
+        fun openApp(packageName: String): String = deviceAction.openApp(packageName).toString()
+
+        @JavascriptInterface
+        fun findPackageByLabel(label: String): String = deviceAction.findPackageByLabel(label)
+
+        @JavascriptInterface
+        fun setAlarm(hour: Int, minute: Int, message: String): String =
+            deviceAction.setAlarm(hour, minute, message).toString()
+
+        @JavascriptInterface
+        fun setTimer(seconds: Int, message: String): String =
+            deviceAction.setTimer(seconds, message).toString()
+
+        @JavascriptInterface
+        fun mediaControl(action: String): String = deviceAction.mediaControl(action).toString()
+
+        @JavascriptInterface
+        fun openWebUrl(url: String): String = deviceAction.openUrl(url).toString()
+
+        @JavascriptInterface
+        fun hasUsageStatsAccess(): Boolean = deviceAction.hasUsageStatsAccess()
+
+        @JavascriptInterface
+        fun hasCalendarReadPermission(): Boolean = calendar.hasReadPermission()
+
+        @JavascriptInterface
+        fun hasCalendarWritePermission(): Boolean = calendar.hasWritePermission()
+
+        @JavascriptInterface
+        fun requestCalendarPermission(read: Boolean, write: Boolean): Boolean {
+            val needed = mutableListOf<String>()
+            if (read && !calendar.hasReadPermission()) needed.add(Manifest.permission.READ_CALENDAR)
+            if (write && !calendar.hasWritePermission()) needed.add(Manifest.permission.WRITE_CALENDAR)
+            if (needed.isEmpty()) return true
+            runCatching { calendarPermissionLauncher.launch(needed.toTypedArray()) }
+            return false
+        }
+
+        @JavascriptInterface
+        fun readCalendarEvents(daysAhead: Int, daysBack: Int): String =
+            calendar.readEventsJson(daysAhead, daysBack)
+
+        @JavascriptInterface
+        fun insertCalendarEvent(
+            title: String,
+            allDay: Boolean,
+            year: Int,
+            month: Int,
+            day: Int,
+            startMillis: Long,
+            endMillis: Long,
+            description: String,
+        ): String = calendar.insertEvent(
+            title, allDay, year, month, day, startMillis, endMillis, description,
+        ).toString()
+
+        @JavascriptInterface
+        fun deleteCalendarEvent(eventId: Long): String = calendar.deleteOwnEvent(eventId).toString()
+
+        @JavascriptInterface
+        fun getCalendarCapabilities(): String = calendar.capabilitiesJson()
+
+        @JavascriptInterface
+        fun getLocationCapabilities(): String = locationBridge.capabilitiesJson()
+
+        @JavascriptInterface
+        fun hasLocationPermission(): Boolean = locationBridge.hasAny()
+
+        @JavascriptInterface
+        fun requestLocationPermission(): Boolean {
+            if (locationBridge.hasAny()) return true
+            val needed = mutableListOf<String>()
+            if (!locationBridge.hasFine()) needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            if (!locationBridge.hasCoarse()) needed.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (needed.isEmpty()) return true
+            runCatching { locationPermissionLauncher.launch(needed.toTypedArray()) }
+            return false
+        }
+
+        @JavascriptInterface
+        fun readLocation(): String = locationBridge.readJson().toString()
+
+        @JavascriptInterface
+        fun refreshLocation() {
+            locationBridge.refresh()
+        }
+
+        @JavascriptInterface
+        fun getLocationDiagnostics(): String = locationBridge.diagnosticsJson()
+
+        @JavascriptInterface
+        fun getHealthCapabilities(): String = healthBridge.capabilitiesJson()
+
+        @JavascriptInterface
+        fun hasHealthPermission(): Boolean = healthBridge.hasSleepPermission() || healthPermissionGranted
+
+        @JavascriptInterface
+        fun requestHealthPermission(): Boolean {
+            if (healthBridge.hasSleepPermission()) return true
+            if (!healthBridge.isAvailable()) return false
+            return runCatching {
+                healthPermissionLauncher.launch(setOf(HealthBridge.PERM_SLEEP))
+                false
+            }.getOrDefault(false)
+        }
+
+        @JavascriptInterface
+        fun readSleep(): String = healthBridge.readJson().toString()
+
+        @JavascriptInterface
+        fun refreshHealth() {
+            healthBridge.refresh()
+        }
+
+        @JavascriptInterface
+        fun openHealthSettings(): Boolean = healthBridge.openHealthSettings()
+
+        @JavascriptInterface
+        fun getHealthDiagnostics(): String = healthBridge.diagnosticsJson()
+
+        @JavascriptInterface
+        fun getDeviceActionCapabilities(): String = deviceAction.capabilitiesJson()
+
+        @JavascriptInterface
+        fun openSystemSettings(which: String): Boolean = deviceAction.openSystemSettings(which)
+
+        @JavascriptInterface
+        fun notify(title: String, body: String, avatarUrl: String, sessionId: String?): Boolean =
+            notifyForIdentity(title, body, avatarUrl, sessionId, "")
+
+        @JavascriptInterface
+        fun notifyForIdentity(title: String, body: String, avatarUrl: String, sessionId: String?, identityId: String): Boolean = runCatching {
+            ensureMessageChannel()
+            val manager = getSystemService(NotificationManager::class.java)
+            val icon = loadAvatarBitmap(avatarUrl)
+            val builder = NotificationCompat.Builder(this@MainActivity, CH_MESSAGES)
+                .setSmallIcon(R.drawable.ic_stat)
+                .setContentTitle(title.ifBlank { "小手机" })
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setContentIntent(contentIntent(sessionId))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+            if (icon != null) builder.setLargeIcon(icon)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                builder.setColor(0xFF5B7CFA.toInt())
+            }
+            val sid = sessionId?.trim().orEmpty()
+            if (sid.isNotEmpty()) {
+                val remoteInput = androidx.core.app.RemoteInput.Builder(NotificationReplyReceiver.KEY_REPLY_TEXT)
+                    .setLabel("回复")
+                    .build()
+                val replyIntent = Intent(this@MainActivity, NotificationReplyReceiver::class.java).apply {
+                    action = NotificationReplyReceiver.ACTION_REPLY
+                    putExtra(NotificationReplyReceiver.EXTRA_SESSION_ID, sid)
+                    putExtra(NotificationReplyReceiver.EXTRA_IDENTITY_ID, identityId)
+                    // Intent data, unlike extras, participates in PendingIntent identity.
+                    data = Uri.parse("floatshell://reply/${Uri.encode(identityId)}/${Uri.encode(sid)}")
+                }
+                val replyPending = PendingIntent.getBroadcast(
+                    this@MainActivity,
+                    sid.hashCode(),
+                    replyIntent,
+                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+                builder.addAction(
+                    NotificationCompat.Action.Builder(R.drawable.ic_stat, "回复", replyPending)
+                        .addRemoteInput(remoteInput)
+                        .setAllowGeneratedReplies(true)
+                        .build(),
+                )
+            }
+            manager.notify(webNotifId++, builder.build())
+            if (webNotifId > 900) webNotifId = 500
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun downloadUrl(url: String, fileName: String): Boolean = runCatching {
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return@runCatching false
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeDownloadName(fileName))
+            }
+            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun startCallOverlay(name: String, avatar: String, meta: String, callId: String, elapsedSeconds: Int): Boolean {
+            if (!CallOverlayService.canDraw(this@MainActivity)) return false
+            val avatarRef = CallOverlayService.prepareAvatarRef(this@MainActivity, avatar)
+            return CallOverlayService.start(this@MainActivity, name, avatarRef, meta, callId, elapsedSeconds)
+        }
+
+        @JavascriptInterface
+        fun getOverlayDebugInfo(): String = CallOverlayService.debugInfo(this@MainActivity)
+
+        @JavascriptInterface
+        fun showCallOverlay() {
+            runCatching { CallOverlayService.show(this@MainActivity) }
+        }
+
+        @JavascriptInterface
+        fun hideCallOverlay() {
+            runCatching { CallOverlayService.hide(this@MainActivity) }
+        }
+
+        @JavascriptInterface
+        fun updateCallOverlay(name: String, avatar: String, meta: String, elapsedSeconds: Int) {
+            val avatarRef = CallOverlayService.prepareAvatarRef(this@MainActivity, avatar)
+            runCatching { CallOverlayService.update(this@MainActivity, name, avatarRef, meta, elapsedSeconds) }
+        }
+
+        @JavascriptInterface
+        fun updateCallOverlayPending(count: Int) {
+            runCatching { CallOverlayService.updatePending(this@MainActivity, count) }
+        }
+
+        @JavascriptInterface
+        fun stopCallOverlay() {
+            runCatching { CallOverlayService.stop(this@MainActivity) }
+        }
+
+        @JavascriptInterface
+        fun getOverlayThemeJson(): String = CallOverlayService.currentThemeJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun setOverlayThemeJson(json: String) {
+            runCatching { CallOverlayService.setThemeJson(this@MainActivity, json) }
+        }
+
+        @JavascriptInterface
+        fun canDrawOverlay(): Boolean = CallOverlayService.canDraw(this@MainActivity)
+
+        @JavascriptInterface
+        fun requestOverlayPermission() {
+            if (Build.VERSION.SDK_INT < 23) return
+            runCatching {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+
+        @JavascriptInterface
+        fun isAccessibilityConnected(): Boolean = CallControlService.connected
+
+        @JavascriptInterface
+        fun openAccessibilitySettings() {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+
+        @JavascriptInterface
+        fun getScreenshotCapabilities(): String = ScreenshotBridge.capabilitiesJson()
+
+        @JavascriptInterface
+        fun captureScreenshot(): String = ScreenshotBridge.capture().toString()
+
+        @JavascriptInterface
+        fun getCheckInCapabilities(): String = CheckInService.capabilitiesJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun getScreenshotDiagnostics(): String = ScreenshotBridge.diagnosticsJson()
+
+        @JavascriptInterface
+        fun getCheckInDiagnostics(): String = CheckInService.diagnosticsJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun consumePendingUserShot(): String = CheckInService.consumePendingUserShot()
+
+        @JavascriptInterface
+        fun getScreenshotBallCapabilities(): String = ScreenshotBallService.capabilitiesJson()
+
+        @JavascriptInterface
+        fun setScreenshotBallStyle(json: String): Boolean =
+            ScreenshotBallService.setStyle(this@MainActivity, json)
+
+        @JavascriptInterface
+        fun getScreenshotBallStyle(): String =
+            ScreenshotBallService.styleJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun setScreenshotShareTargets(json: String): Boolean =
+            CheckInService.setShareTargets(this@MainActivity, json)
+
+        @JavascriptInterface
+        fun getScreenshotShareTargets(): String =
+            CheckInService.shareTargetsJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun prepareScreenshotBall(): Boolean = ScreenshotBallService.prepare(this@MainActivity)
+
+        @JavascriptInterface
+        fun stopScreenshotBall() {
+            ScreenshotBallService.stop(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun prepareCheckIn(): Boolean = CheckInService.prepare(this@MainActivity)
+
+        @JavascriptInterface
+        fun stopCheckIn() {
+            CheckInService.stop(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun consumePendingReplies(): String = NotificationReplyReceiver.consumePendingReplies(this@MainActivity)
+
+        @JavascriptInterface
+        fun requestCheckIn(characterId: String, name: String, avatar: String) {
+            CheckInService.show(this@MainActivity, characterId, name, avatar)
+        }
+
+        @JavascriptInterface
+        fun getCheckInTheme(): String = CheckInOverlayTheme.themeJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun setCheckInTheme(json: String): Boolean =
+            CheckInOverlayTheme.setTheme(this@MainActivity, json)
+
         @JavascriptInterface
         fun openAppSettings() {
             runCatching {
@@ -237,7 +960,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        /** 请求忽略电池优化（保活关键一步）。 */
         @SuppressLint("BatteryLife")
         @JavascriptInterface
         fun requestIgnoreBatteryOptimization() {
@@ -248,5 +970,141 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+
+        @JavascriptInterface
+        fun saveBase64File(fileName: String, base64: String): Boolean = runCatching {
+            val safeName = fileName
+                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                .trim()
+                .ifBlank { "download" }
+                .take(120)
+            val bytes = Base64.decode(base64, Base64.DEFAULT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                    put(MediaStore.Downloads.MIME_TYPE, guessMimeType(safeName))
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return@runCatching false
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: return@runCatching false
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!dir.exists()) dir.mkdirs()
+                FileOutputStream(File(dir, safeName)).use { it.write(bytes) }
+            }
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun launchExternalApp(packageName: String, dataUrl: String): Boolean = runCatching {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+                ?: return@runCatching false
+            if (dataUrl.isNotBlank()) intent.data = Uri.parse(dataUrl)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun openUrl(url: String): Boolean = runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun ensureMessageChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        runCatching {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CH_MESSAGES, "角色消息", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "角色发来的消息"
+                },
+            )
+        }
+    }
+
+    private fun loadAvatarBitmap(avatarUrl: String): Bitmap? {
+        val value = avatarUrl.trim()
+        if (value.isEmpty()) return null
+        return runCatching {
+            if (value.startsWith("data:image/")) decodeDataUrlBitmap(value) else fetchRemoteAvatar(value)
+        }.getOrNull()
+    }
+
+    private fun decodeDataUrlBitmap(dataUrl: String): Bitmap? = runCatching {
+        val comma = dataUrl.indexOf(',')
+        if (comma < 0) return@runCatching null
+        val header = dataUrl.substring(0, comma)
+        if (!header.contains("base64", ignoreCase = true)) return@runCatching null
+        val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }.getOrNull()
+
+    private fun fetchRemoteAvatar(url: String): Bitmap? = runCatching {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return@runCatching null
+        val builder = Request.Builder().url(url)
+        val cookie = CookieManager.getInstance().getCookie(url)
+        if (!cookie.isNullOrEmpty()) builder.header("Cookie", cookie)
+        avatarClient.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) return@runCatching null
+            val bytes = response.body?.bytes() ?: return@runCatching null
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }
+    }.getOrNull()
+
+    private fun guessMimeType(fileName: String): String = when (fileName.substringAfterLast('.', "").lowercase()) {
+        "json" -> "application/json"
+        "zip" -> "application/zip"
+        "txt" -> "text/plain"
+        "md" -> "text/markdown"
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"
+        "mp4" -> "video/mp4"
+        else -> "application/octet-stream"
+    }
+
+    private inner class PhoneWidgetBridge {
+
+        @JavascriptInterface
+        fun isSupported(): Boolean = true
+
+        @JavascriptInterface
+        fun update(html: String, widthDp: Int, heightDp: Int, scale: Int): Boolean = runCatching {
+            PhoneWidgetProvider.saveSize(this@MainActivity, widthDp, heightDp, scale)
+            PhoneWidgetRenderer.renderAndPush(this@MainActivity, html, widthDp, heightDp, scale)
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun refresh(): Boolean = runCatching {
+            val (w, h, scale) = PhoneWidgetProvider.loadSize(this@MainActivity)
+            PhoneWidgetRenderer.renderCached(this@MainActivity, w, h, scale)
+            true
+        }.getOrDefault(false)
+
+        @JavascriptInterface
+        fun isPlaced(): Boolean = PhoneWidgetProvider.isPlaced(this@MainActivity)
+
+        @JavascriptInterface
+        fun diagnostics(): String = PhoneWidgetRenderer.diagnosticsJson(this@MainActivity)
+
+        @JavascriptInterface
+        fun requestPin(): Boolean = runCatching {
+            PhoneWidgetProvider.requestPin(this@MainActivity)
+            true
+        }.getOrDefault(false)
     }
 }

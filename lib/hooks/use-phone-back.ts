@@ -97,6 +97,9 @@ export function usePhoneBack(
       window.history.forward();
       back();
     };
+    const target = window as Window & { floatShellBack?: () => boolean; floatShellCanStartBack?: (x: number,y: number) => boolean };
+    target.floatShellBack = () => { back(); return true; };
+    target.floatShellCanStartBack = (x,y) => current.current.appOpen && !document.elementFromPoint(x,y)?.closest(IGNORE);
     addGuard();
     window.addEventListener("popstate", onPop);
     shell.addEventListener("pointerup", addGuard, true);
@@ -108,6 +111,7 @@ export function usePhoneBack(
     shell.addEventListener("touchcancel", onCancel, true);
     shell.addEventListener("click", onClick, true);
     return () => {
+      delete target.floatShellBack; delete target.floatShellCanStartBack;
       window.removeEventListener("popstate", onPop);
       shell.removeEventListener("pointerup", addGuard, true);
       shell.removeEventListener("touchend", addGuard, true);

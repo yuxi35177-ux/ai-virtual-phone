@@ -1,4 +1,7 @@
 "use client";
+import { PerceptionBootstrap } from "@/components/perception/perception-bootstrap";
+import { CheckInScheduler } from "@/components/screenshot/checkin-scheduler";
+import { WidgetScheduler } from "@/components/widget/widget-scheduler";
 
 import { isResumingPersona } from "@/lib/persona-navigation";
 import { useEffect, useState } from "react";
@@ -324,6 +327,9 @@ export function MainApp() {
             />
             {!resumePersona && <OfflinePushRevampAnnouncement />}
             <CloudBackupScheduler />
+            <PerceptionBootstrap />
+            <CheckInScheduler />
+            <WidgetScheduler />
             <RealityBridgeScheduler />
             <MediaMaintenanceScheduler />
           </MusicProvider>
