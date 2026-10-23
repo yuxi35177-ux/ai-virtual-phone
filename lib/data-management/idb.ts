@@ -1,3 +1,4 @@
+import { personaDatabaseName, personaLocalStorage } from "../persona-scope";
 import type {
   ClearResult,
   DataSource,
@@ -141,7 +142,7 @@ function tryReplaceEmptyJsonValue(existingRaw: string, incomingRaw: string): str
 export function deleteDatabase(dbName: string): Promise<void> {
   return new Promise((resolve) => {
     if (!hasIndexedDb()) return resolve();
-    const request = indexedDB.deleteDatabase(dbName);
+    const request = indexedDB.deleteDatabase(personaDatabaseName(dbName));
     request.onsuccess = () => resolve();
     request.onerror = () => resolve();
     request.onblocked = () => resolve();
@@ -156,7 +157,7 @@ async function openDb(
 ): Promise<IDBDatabase | null> {
   if (!hasIndexedDb()) return null;
   return new Promise((resolve) => {
-    const request = version ? indexedDB.open(dbName, version) : indexedDB.open(dbName);
+    const request = version ? indexedDB.open(personaDatabaseName(dbName), version) : indexedDB.open(personaDatabaseName(dbName));
     let settled = false;
     let blockedTimer: ReturnType<typeof setTimeout> | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -348,10 +349,10 @@ async function exportKvSource(source: KvSource, collector?: MediaCollector): Pro
 async function exportLocalStorageSource(source: LocalStorageSource, collector?: MediaCollector): Promise<LocalStorageSourceBackup> {
   if (typeof window === "undefined") return { type: "localStorage", records: [] };
   const records: { key: string; value: string }[] = [];
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
+  for (let index = 0; index < personaLocalStorage.length; index += 1) {
+    const key = personaLocalStorage.key(index);
     if (!key || !matchesKey(key, source)) continue;
-    const value = window.localStorage.getItem(key);
+    const value = personaLocalStorage.getItem(key);
     if (value !== null) records.push({ key, value: await serializeStorageString(value, collector) });
   }
   return { type: "localStorage", records };
@@ -534,13 +535,13 @@ export async function importSource(
     for (const record of payload.records) {
       // 单条失败（配额满、单条数据损坏）只损失这一条，剩下的照常导入。
       try {
-        const exists = window.localStorage.getItem(record.key) !== null;
+        const exists = personaLocalStorage.getItem(record.key) !== null;
         if (exists && !overwrite) {
           result.skipped += 1;
           continue;
         }
         const value = await deserializeStorageString(record.value, resolver);
-        window.localStorage.setItem(record.key, value);
+        personaLocalStorage.setItem(record.key, value);
         if (exists) result.overwritten += 1;
         else result.added += 1;
       } catch (error) {
@@ -650,12 +651,12 @@ export async function clearSource(source: DataSource): Promise<ClearResult> {
 
   if (source.type === "localStorage") {
     const keys: string[] = [];
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
+    for (let index = 0; index < personaLocalStorage.length; index += 1) {
+      const key = personaLocalStorage.key(index);
       if (key && matchesKey(key, source)) keys.push(key);
     }
     for (const key of keys) {
-      window.localStorage.removeItem(key);
+      personaLocalStorage.removeItem(key);
       result.removed += 1;
     }
     return result;
