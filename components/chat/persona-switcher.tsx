@@ -61,7 +61,7 @@ export function PersonaSwitcher() {
       <ChevronDown size={24} strokeWidth={1.7} />
     </button>
     {open && createPortal(<div className="modal-overlay" data-ui="modal" onClick={close} style={{ zIndex: 10000 }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="persona-title" data-persona-dialog className="modal-dialog" onClick={e => e.stopPropagation()} style={{ width: "min(90vw,420px)", maxHeight: "80dvh", overflowY: "auto", background: "var(--c-card)", color: "var(--c-text-title)", padding: 22 }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="persona-title" data-persona-dialog className="modal-dialog" onClick={e => e.stopPropagation()} style={{ width: "calc(100vw - 32px)", maxWidth: 360, display: "block", maxHeight: "80dvh", overflowY: "auto", background: "linear-gradient(var(--c-card),var(--c-card)), #fff", color: "var(--c-text-title)", padding: 22 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <h2 id="persona-title" style={{ fontSize: 20, fontWeight: 700 }}>切换人设</h2>
           <button ref={closeRef} type="button" className="page-back-btn" aria-label="关闭人设切换" disabled={busy} onClick={close}><X size={22} /></button>
@@ -73,7 +73,7 @@ export function PersonaSwitcher() {
             <span>{i.name}{i.id === registry?.ownerId ? " · 原存档" : ""}</span>{i.id === registry?.activeId && <Check size={18} aria-label="当前人设" />}
           </button>)}
         </div>
-        <form onSubmit={e => { e.preventDefault(); void add(); }} style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <form onSubmit={e => { e.preventDefault(); void add(); }} style={{ display: "flex", width: "100%", gap: 8, marginTop: 18 }}>
           <input aria-label="新人设名称" placeholder="新人设名称" maxLength={50} value={name} disabled={busy} onChange={e => setName(e.target.value)} style={{ minWidth: 0, flex: 1, padding: 12, borderRadius: 12, background: "var(--c-input)", border: "1px solid var(--c-input-border)", color: "var(--c-text-title)" }} />
           <button type="submit" className="ui-btn ui-btn-primary" disabled={busy || !name.trim()}><Plus size={17} />新增</button>
         </form>
