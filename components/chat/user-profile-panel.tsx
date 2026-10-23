@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, type CSSProperties } from "react";
+import { PersonaSwitcher } from "./persona-switcher";
 import CSSSchemeBar from "@/components/ui/css-scheme-picker";
 import {
     loadFollowUpConfig,
@@ -319,7 +320,7 @@ export function UserProfilePanel({ onClose, className }: UserProfilePanelProps) 
                     display: none;
                 }
             `}</style>
-            <PageShell title="" onBack={onClose} className={`user-profile-page-root ${className || ""}`}>
+            <PageShell title="" onBack={onClose} rightAction={<PersonaSwitcher />} className={`user-profile-page-root ${className || ""}`}>
                 <div className="relative z-[1] w-full max-w-2xl mx-auto flex flex-col pb-8">
                     
                     {/* User Info & Stats Block */}
