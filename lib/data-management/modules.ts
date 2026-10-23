@@ -1,3 +1,4 @@
+import { PERSONA_REGISTRY_KEY } from "../persona-scope";
 import type { DataModuleDefinition, DataModuleId } from "./types";
 
 // localStorage keys owned by other modules. The catch-all "cache" module
@@ -6,6 +7,7 @@ import type { DataModuleDefinition, DataModuleId } from "./types";
 // volatile localStorage while the real data lives in IndexedDB; deleting a flag
 // while the DB still has data would shadow real data with empty caches on reload.
 const RESERVED_LOCAL_STORAGE_KEYS = [
+  PERSONA_REGISTRY_KEY,
   "ai_phone_idb_migrated_v1",
   "ai_phone_settings_idb_migrated_v1",
 ];
@@ -21,6 +23,7 @@ const RESERVED_LOCAL_STORAGE_KEYS = [
 // 单独带上它（见 backup.ts 的 includeCloudCredentials），云端备份照旧不带。
 export const CLOUD_CREDENTIAL_KV_KEYS = ["ai_phone_cloud_backup_config_v1"];
 const KV_BACKUP_EXCLUDED_KEYS = [
+  PERSONA_REGISTRY_KEY,
   ...CLOUD_CREDENTIAL_KV_KEYS,
   "ai_phone_cloud_backup_state_v1",
 ];
